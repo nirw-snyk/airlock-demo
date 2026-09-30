@@ -4,6 +4,18 @@ A scripted walkthrough of Snyk **Malicious Code Defense** (internally "Airlock")
 
 `demo.sh` runs the same walkthrough for either ecosystem and prints a summary table of what actually happened.
 
+> **TODO: region support.** This demo is configured against the Snyk **MT-AU** region (`api.au.snyk.io` / `app.au.snyk.io`). Running it against any other region (US, EU, etc.) needs these changes in addition to the tenant ID:
+>
+> - [ ] `.npmrc`: change the host in the `registry=` URL from `api.au.snyk.io` to your region's API host.
+> - [ ] `pip.conf`: change the host in the `index-url` (and in the `~/.netrc` example comment at the bottom).
+> - [ ] `~/.netrc`: the `machine` entry must match your region's API host, or pip won't send credentials.
+> - [ ] `demo.sh` line 13: `PORTAL_URL` is hardcoded to `https://app.au.snyk.io/malware`. Change it to your region's app host (used for the dashboard wrap-up in section 6).
+> - [ ] This README: the dashboard link under [Prerequisites](#prerequisites) and the `api.au.snyk.io` references in Setup steps 2 and 3.
+> - [ ] Use a Snyk token issued for your region's tenant. An MT-AU token won't authenticate elsewhere.
+> - [ ] Re-verify the tenant policies below in the target region, and re-check that the demo packages behave the same (Unmaintained, Cooldown, and the `@onum-releases/ixel` malware entry depend on that region's advisory data and policy config).
+>
+> Longer term, `PORTAL_URL` could be derived from the proxy host in `.npmrc` so region is set in one place.
+
 ## Setup (start here)
 
 The repo ships with a placeholder tenant. Point it at your own before running anything.
@@ -50,7 +62,6 @@ The repo ships with a placeholder tenant. Point it at your own before running an
 
 - `bash`, `node` and `npm` (for `--npm`), `python3` and `pip` (for `--pypi`)
 - A Snyk tenant with Malicious Code Defense enabled (dashboard: <https://app.au.snyk.io/malware>)
-- PyPI support is private preview and opt-in per tenant. Confirm it's enabled on yours before running `--pypi`.
 - A Snyk token for the proxy (see [Setup](#setup-start-here), step 3)
 
 ## Configuration
