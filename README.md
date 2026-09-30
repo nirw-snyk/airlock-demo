@@ -4,39 +4,58 @@ A scripted walkthrough of Snyk **Malicious Code Defense** (internally "Airlock")
 
 `demo.sh` runs the same walkthrough for either ecosystem and prints a summary table of what actually happened.
 
+## Setup (start here)
+
+The repo ships with a placeholder tenant. Point it at your own before running anything.
+
+1. **Clone the repo**
+   ```bash
+   git clone https://github.com/nirw-snyk/airlock-demo.git
+   cd airlock-demo
+   ```
+
+2. **Change the tenant ID in two files.** Both contain a `TODO` comment marking the spot. The tenant ID is the UUID after `/tenants/` in the URL.
+
+   | File | Line to edit |
+   | --- | --- |
+   | `.npmrc` | `registry=https://api.au.snyk.io/hidden/tenants/<TENANT_ID>/registry/npm/` |
+   | `pip.conf` | `index-url = https://api.au.snyk.io/hidden/tenants/<TENANT_ID>/registry/pypi/simple/` (must end in `/simple/`) |
+
+   Or replace it in both files at once (`sed -i ''` is the macOS form; use `sed -i` on Linux):
+   ```bash
+   sed -i '' 's/8951eddb-f5c4-4564-986c-1373b4bcbc6a/<YOUR_TENANT_ID>/' .npmrc pip.conf
+   ```
+   Then delete the `TODO` comment lines. Leave the `BEGIN/END snyk-malicious-code-defense` markers in place, since Snyk tooling manages the lines between them. If your tenant uses a different host than `api.au.snyk.io`, update the host in both URLs too.
+
+   `demo.sh` reads the proxy URL from these two files, so no script changes are needed. `package-lock.json` is git-ignored and regenerated on the first `npm install`, so it needs no edit.
+
+3. **Add your credentials.** No token is committed to this repo.
+   - **pip:** add an entry to `~/.netrc`. pip reads it automatically for basic auth.
+     ```
+     machine api.au.snyk.io
+     login snyk
+     password <your Snyk token>
+     ```
+   - **npm:** put the auth token in your user-level `~/.npmrc`, never in the project `.npmrc`.
+
+4. **Check the config took effect**
+   ```bash
+   npm config get registry                                  # should print your tenant's npm URL
+   PIP_CONFIG_FILE="$PWD/pip.conf" python3 -m pip config list   # should show your tenant's index-url
+   ```
+
+5. **Run the demo**: `./demo.sh --npm` or `./demo.sh --pypi` (see [Usage](#usage)).
+
 ## Prerequisites
 
 - `bash`, `node` and `npm` (for `--npm`), `python3` and `pip` (for `--pypi`)
 - A Snyk tenant with Malicious Code Defense enabled (dashboard: <https://app.au.snyk.io/malware>)
 - PyPI support is private preview and opt-in per tenant. Confirm it's enabled on yours before running `--pypi`.
-- A Snyk token for the proxy (see [Authentication](#authentication))
+- A Snyk token for the proxy (see [Setup](#setup-start-here), step 3)
 
 ## Configuration
 
-### 1. Set your tenant ID
-
-Replace the tenant ID in the registry URLs with your own:
-
-| File | Setting |
-| --- | --- |
-| `.npmrc` | `registry=https://api.au.snyk.io/hidden/tenants/<TENANT_ID>/registry/npm/` |
-| `pip.conf` | `index-url = https://api.au.snyk.io/hidden/tenants/<TENANT_ID>/registry/pypi/simple/` (path must end in `/simple/`) |
-
-`demo.sh` reads the proxy URL from these files, so nothing else needs editing. Keep the `BEGIN/END snyk-malicious-code-defense` marker comments; the Snyk tooling manages the lines between them.
-
-### 2. Authentication
-
-No token is committed to this repo.
-
-- **pip:** add an entry to `~/.netrc`. pip reads it automatically for basic auth.
-  ```
-  machine api.au.snyk.io
-  login snyk
-  password <your Snyk token>
-  ```
-- **npm:** put the token in your user-level `~/.npmrc`, not the project `.npmrc`.
-
-### 3. Scope of the pip config
+### Scope of the pip config
 
 pip config is user-global by default, so `pip.conf` is deliberately not placed in pip's default location. `demo.sh --pypi` loads it via `PIP_CONFIG_FILE`, so only this demo's installs go through the proxy. To use it manually:
 
@@ -44,7 +63,7 @@ pip config is user-global by default, so `pip.conf` is deliberately not placed i
 export PIP_CONFIG_FILE="$PWD/pip.conf"
 ```
 
-### 4. Tenant policies
+### Tenant policies
 
 The demo expects these policies on the tenant:
 
