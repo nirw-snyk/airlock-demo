@@ -106,9 +106,9 @@ pause
 section "1. Prove it's a live, working registry"
 if [ "$ECOSYSTEM" = "npm" ]; then
   run npm install
-  echo "-> nanoid, lodash, and p-limit (plus its yocto-queue dependency)"
+  echo "-> uuid, lodash, and p-limit (plus its yocto-queue dependency)"
   echo "   installed normally through the proxy."
-  summarize "nanoid, lodash, p-limit+yocto-queue" "Installed normally -- no policy match"
+  summarize "uuid, lodash, p-limit+yocto-queue" "Installed normally -- no policy match"
 else
   run python3 -m pip install --target pip-demo-packages -r requirements.txt
   echo "-> packaging and certifi installed normally through the proxy."

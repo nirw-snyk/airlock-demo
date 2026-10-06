@@ -99,7 +99,7 @@ Run it from the project directory. The script pauses between sections; press Ent
 | # | Section | npm | PyPI |
 | --- | --- | --- | --- |
 | 0 | Reset install artifacts | `rm -rf node_modules package-lock.json` | `rm -rf pip-demo-packages` |
-| 1 | Normal install works through the proxy | `nanoid`, `lodash`, `p-limit` | `packaging`, `certifi` |
+| 1 | Normal install works through the proxy | `uuid`, `lodash`, `p-limit` | `packaging`, `certifi` |
 | 2 | Known-malicious package blocked | `@onum-releases/ixel` | `maliciouseuropy` (see caveat below) |
 | 3 | Unmaintained package blocked | `left-pad` | `nose` |
 | 4 | Cooldown holds back the newest release | `@aws-sdk/client-s3` | `boto3` |
