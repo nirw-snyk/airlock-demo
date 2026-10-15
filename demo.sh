@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Repeatable Malicious Code Defense (Airlock) demo script.
 # Run from inside this project directory. Reads the proxy URL straight out
-# of the local .npmrc/pip.conf so it stays correct even if the tenant/proxy changes.
+# of the local .npmrc/pip.conf/go.env so it stays correct even if the tenant/proxy changes.
 set -euo pipefail
 
-if [ $# -ne 1 ] || { [ "$1" != "--npm" ] && [ "$1" != "--pypi" ]; }; then
-  echo "Usage: $0 --npm|--pypi" >&2
+if [ $# -ne 1 ] || { [ "$1" != "--npm" ] && [ "$1" != "--pypi" ] && [ "$1" != "--go" ]; }; then
+  echo "Usage: $0 --npm|--pypi|--go" >&2
   exit 1
 fi
 ECOSYSTEM="${1#--}"
@@ -30,6 +30,31 @@ npm_compare_versions() {
   proxy=$(npm view "$pkg" version --registry "$PROXY_URL" 2>/dev/null || echo "(none resolved)")
   echo "${pub}|${proxy}"
 }
+# Go only. Succeeds if the public Go proxy can resolve the module, which lets a
+# failed proxy lookup be told apart from a module that simply doesn't exist.
+go_public_resolves() { GOPROXY="$PUBLIC_URL" go list -m "$1@latest" >/dev/null 2>&1; }
+# Go only. Prints the version `go list -m` resolves for a module via $1 (a GOPROXY value).
+go_latest_via() { GOPROXY="$1" go list -m "$2@latest" 2>/dev/null | awk '{print $2}' || true; }
+# Go only. Fetches $1@latest through the proxy and sets GO_RESULT to:
+#   ok            -- the proxy served it
+#   blocked       -- the proxy refused it but the public proxy resolves it
+#   unresolvable  -- both failed, so the module may simply not exist (proves nothing)
+go_try() {
+  local out status
+  set +e
+  out=$(run go mod download "$1@latest" 2>&1)
+  status=$?
+  set -e
+  echo "$out"
+  if [ "$status" -eq 0 ]; then GO_RESULT=ok
+  elif go_public_resolves "$1"; then GO_RESULT=blocked
+  else GO_RESULT=unresolvable
+  fi
+}
+# Whether section 3 actually observed the unmaintained block. npm/pypi assume
+# it; Go sets it from the real outcome so section 5 can't claim an override of
+# a block that never happened.
+UNMAINTAINED_BLOCK_OBSERVED=1
 
 if [ "$ECOSYSTEM" = "npm" ]; then
   PROXY_URL=$(grep '^registry=' .npmrc | head -1 | cut -d= -f2-)
@@ -59,6 +84,51 @@ if [ "$ECOSYSTEM" = "npm" ]; then
   # versions) positioned to override the Unmaintained rule -- not yet
   # confirmed added on this tenant as of 2026-09-13.
   ALLOWED_UNMAINTAINED_PKG="object-assign"
+elif [ "$ECOSYSTEM" = "go" ]; then
+  command -v go >/dev/null || { echo "go not found on PATH (install from https://go.dev/dl/)" >&2; exit 1; }
+  SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  PROXY_URL=$(grep '^GOPROXY=' go.env | head -1 | cut -d= -f2-)
+  PUBLIC_URL="https://proxy.golang.org"
+  # GOENV scopes go.env to this demo (same idea as PIP_CONFIG_FILE). GOPROXY is
+  # also exported directly because a GOPROXY already set in your shell would
+  # beat the GOENV file and silently route around the proxy. GOMODCACHE is
+  # project-local so a module cached by earlier work on this machine can't make
+  # an install succeed without ever asking the proxy; -modcacherw keeps it
+  # deletable by section 0.
+  export GOENV="$SCRIPT_DIR/go.env" GOPROXY="$PROXY_URL"
+  export GOMODCACHE="$SCRIPT_DIR/go-mod-cache" GOFLAGS=-modcacherw
+  # Real malicious module from the OpenSSF malicious-packages dataset (most of
+  # the others there 403 on proxy.golang.org itself, so they can't show a Snyk
+  # block). Snyk DOES have an advisory for it (SNYK-GOLANG-GITHUBCOMBUFFERZONECORP
+  # NETHELPER-16643554, shown as "This is a malicious package" on
+  # security.snyk.io), yet through this tenant's proxy it was still served in
+  # full on 2026-10-15, same as public -- so the gap is the tenant's Go malware
+  # policy/enforcement, not missing advisory data. Section 2 reports what
+  # actually happens either way. `go mod download` only fetches the module
+  # files; Go never builds or runs a module at download time.
+  KNOWN_MALICIOUS_PKG="github.com/bufferzonecorp/net-helper"
+  # Section 1 modules are pinned in go.mod (compress v1.19.1 2026-07-20, x/term
+  # v0.45.0 2026-07-08 -> its one dependency x/sys v0.47.0 2026-06-30) so they
+  # are past the cooldown window (10-20 days here) yet within 12 months, and
+  # all three modules released again within the last month. That keeps them out
+  # of both the Cooldown and Unmaintained rules. Re-pick when they age out.
+  # Archived, zero dependencies, last release 2019-01-27. Verified blocked
+  # 2026-10-15 once the 12-month Unmaintained policy was on (403 "blocked by
+  # Snyk policy: package has not had a release in the last 12 months").
+  # pkg/errors (2020), go-spew (2018), gorilla/mux and google/uuid are also
+  # stale but are still served -- very popular modules seem to be exempt -- so
+  # always verify a candidate against the proxy before using it here.
+  UNMAINTAINED_PKG="github.com/mitchellh/go-homedir"
+  # AWS publishes this module several times a week, so there's almost always a
+  # release still inside the cooldown window (held 2 patch versions back on
+  # 2026-10-15).
+  COOLDOWN_PKG="github.com/aws/aws-sdk-go-v2/service/s3"
+  # Zero dependencies, last release 2022-04-20, archived. Distinct from
+  # go-homedir (which must stay blocked for section 3). Zero deps matters: a
+  # blocked transitive dependency fails the install even when the top-level
+  # module is allow-listed. Requires an Allow-list entry for
+  # github.com/mitchellh/mapstructure (all versions) below Known malware.
+  ALLOWED_UNMAINTAINED_PKG="github.com/mitchellh/mapstructure"
 else
   SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
   export PIP_CONFIG_FILE="$SCRIPT_DIR/pip.conf"
@@ -97,6 +167,8 @@ fi
 section "0. Reset to a clean slate"
 if [ "$ECOSYSTEM" = "npm" ]; then
   run rm -rf node_modules package-lock.json
+elif [ "$ECOSYSTEM" = "go" ]; then
+  run rm -rf go-mod-cache go.sum
 else
   run rm -rf pip-demo-packages
 fi
@@ -109,6 +181,12 @@ if [ "$ECOSYSTEM" = "npm" ]; then
   echo "-> uuid, lodash, and p-limit (plus its yocto-queue dependency)"
   echo "   installed normally through the proxy."
   summarize "uuid, lodash, p-limit+yocto-queue" "Installed normally -- no policy match"
+elif [ "$ECOSYSTEM" = "go" ]; then
+  run go mod tidy
+  run go run .
+  echo "-> klauspost/compress, and x/term plus its one dependency x/sys, downloaded"
+  echo "   and built through the proxy."
+  summarize "klauspost/compress, x/term+x/sys" "Installed normally -- no policy match"
 else
   run python3 -m pip install --target pip-demo-packages -r requirements.txt
   echo "-> packaging and certifi installed normally through the proxy."
@@ -133,6 +211,26 @@ else
     set -e
     echo "-> ENOVERSIONS: the proxy stripped every version before npm could see it."
     summarize "$KNOWN_MALICIOUS_PKG" "Blocked -- known malware rule (ENOVERSIONS)"
+  elif [ "$ECOSYSTEM" = "go" ]; then
+    echo "This is a real, currently-published Go module from the OpenSSF"
+    echo "malicious-packages dataset. 'go mod download' only fetches it; Go never"
+    echo "builds or runs a module at download time."
+    go_try "$KNOWN_MALICIOUS_PKG"
+    case "$GO_RESULT" in
+      blocked)
+        echo "-> The proxy refused a module the public Go proxy serves normally."
+        summarize "$KNOWN_MALICIOUS_PKG" "Blocked -- known malware rule" ;;
+      ok)
+        echo "-> NOT blocked: the proxy served it exactly like the public proxy does."
+        echo "   Snyk has a malicious-package advisory for this module (see"
+        echo "   security.snyk.io), so the Known malware policy isn't being enforced for"
+        echo "   Go on this tenant yet. Nothing was built or run: the module files were"
+        echo "   only fetched into go-mod-cache/, which section 0 deletes."
+        summarize "$KNOWN_MALICIOUS_PKG" "NOT blocked -- proxy served it (no malware policy hit)" ;;
+      *)
+        echo "-> Failed on both proxies, so this doesn't prove the malware rule engaged."
+        summarize "$KNOWN_MALICIOUS_PKG" "Not proven -- unresolvable on the public Go proxy too" ;;
+    esac
   else
     echo "This is a real, currently-published PyPI package with an active Snyk"
     echo "malicious-package advisory. --dry-run resolves the install without"
@@ -171,6 +269,27 @@ else
     echo "-> ENOVERSIONS: same block signature as known-malware, but this time"
     echo "   triggered by staleness, not a malicious-package advisory."
     summarize "$UNMAINTAINED_PKG" "Blocked -- unmaintained rule, 12+ months stale (ENOVERSIONS)"
+  elif [ "$ECOSYSTEM" = "go" ]; then
+    echo "This is a real, currently-published Go module with no release in years"
+    echo "-- flagged by the Unmaintained policy, not by reputation or malware"
+    echo "signatures."
+    go_try "$UNMAINTAINED_PKG"
+    case "$GO_RESULT" in
+      blocked)
+        echo "-> Refused by the proxy though the public Go proxy serves it, this time"
+        echo "   triggered by staleness, not a malicious-package advisory."
+        summarize "$UNMAINTAINED_PKG" "Blocked -- unmaintained rule, 12+ months stale" ;;
+      ok)
+        UNMAINTAINED_BLOCK_OBSERVED=0
+        echo "-> NOT blocked: the proxy served it. The Unmaintained policy isn't"
+        echo "   enforced for Go on this tenant yet, so section 5 can't show an"
+        echo "   override either."
+        summarize "$UNMAINTAINED_PKG" "NOT blocked -- unmaintained rule not enforced for Go" ;;
+      *)
+        UNMAINTAINED_BLOCK_OBSERVED=0
+        echo "-> Failed on both proxies, so this doesn't prove the unmaintained rule engaged."
+        summarize "$UNMAINTAINED_PKG" "Not proven -- unresolvable on the public Go proxy too" ;;
+    esac
   else
     echo "This is a real, currently-published PyPI package flagged by the"
     echo "Unmaintained policy. --dry-run resolves the install without actually"
@@ -187,6 +306,12 @@ pause
 section "4. Cooldown policy: brand-new versions held regardless of reputation"
 if [ "$ECOSYSTEM" = "npm" ]; then
   IFS='|' read -r LATEST_PUBLIC LATEST_PROXY <<< "$(npm_compare_versions "$COOLDOWN_PKG")"
+elif [ "$ECOSYSTEM" = "go" ]; then
+  printf '\n$ %s\n' "GOPROXY=$PUBLIC_URL go list -m $COOLDOWN_PKG@latest"
+  LATEST_PUBLIC=$(go_latest_via "$PUBLIC_URL" "$COOLDOWN_PKG")
+  printf '\n$ %s\n' "GOPROXY=\$PROXY_URL go list -m $COOLDOWN_PKG@latest"
+  LATEST_PROXY=$(go_latest_via "$PROXY_URL" "$COOLDOWN_PKG")
+  LATEST_PROXY="${LATEST_PROXY:-(none resolved)}"
 else
   printf '\n$ %s\n' "python3 -m pip index versions $COOLDOWN_PKG --index-url $PUBLIC_URL"
   # Capture pip's full output before slicing it with head/sed -- piping pip's
@@ -228,12 +353,19 @@ echo "anyway."
 set +e
 if [ "$ECOSYSTEM" = "npm" ]; then
   run npm install "$ALLOWED_UNMAINTAINED_PKG" --no-save
+elif [ "$ECOSYSTEM" = "go" ]; then
+  run go mod download "$ALLOWED_UNMAINTAINED_PKG@latest"
 else
   run python3 -m pip install "$ALLOWED_UNMAINTAINED_PKG" --no-deps --target pip-demo-packages
 fi
 ALLOWED_INSTALL_STATUS=$?
 set -e
-if [ "$ALLOWED_INSTALL_STATUS" -eq 0 ]; then
+if [ "$ALLOWED_INSTALL_STATUS" -eq 0 ] && [ "$UNMAINTAINED_BLOCK_OBSERVED" -eq 0 ]; then
+  echo "-> Installed, but that proves nothing: $UNMAINTAINED_PKG wasn't blocked in"
+  echo "   section 3, so there was no unmaintained block for the allow list to"
+  echo "   override. Re-run once the Unmaintained policy is enforced for $ECOSYSTEM."
+  summarize "$ALLOWED_UNMAINTAINED_PKG" "Installed -- override not proven (no unmaintained block to override)"
+elif [ "$ALLOWED_INSTALL_STATUS" -eq 0 ]; then
   echo "-> Installed successfully despite being unmaintained: the allow-list"
   echo "   entry overrode the same rule that blocked $UNMAINTAINED_PKG above."
   summarize "$ALLOWED_UNMAINTAINED_PKG" "Installed -- allow-list overrides unmaintained rule"
@@ -248,6 +380,10 @@ pause
 
 section "6. Wrap up in the dashboard"
 echo "Switch to $PORTAL_URL -> Install requests on the demo tenant."
+if [ "$ECOSYSTEM" = "go" ]; then
+  echo "Show the requests from this run; the summary below lists what each module actually did."
+  MSG=""
+else
 MSG="Show: normal deps served, "
 if [ -z "$KNOWN_MALICIOUS_PKG" ]; then
   MSG+="the malicious-package block wasn't run this time (see section 2), "
@@ -263,6 +399,7 @@ MSG+="$COOLDOWN_PKG held (cooldown rule), $ALLOWED_UNMAINTAINED_PKG let"
 MSG+=" through despite being just as unmaintained (allow-list policy"
 MSG+=" override) -- five different outcomes, one proxy."
 echo "$MSG"
+fi
 
 section "7. Summary"
 printf '%-42s %s\n' "Package(s)" "Outcome"
