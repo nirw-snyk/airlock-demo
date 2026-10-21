@@ -51,6 +51,22 @@ go_try() {
   else GO_RESULT=unresolvable
   fi
 }
+# Go only. Deletes everything `go mod download` left in the module cache for
+# $1@latest: the extracted source tree and the cached zip/.mod/.info. Paths come
+# from Go itself (-json) and are only removed if they sit inside $GOMODCACHE.
+go_delete_downloaded() {
+  local json dir zip
+  json=$(go mod download -json "$1@latest" 2>/dev/null) || return 0
+  dir=$(printf '%s\n' "$json" | sed -n 's/^[[:space:]]*"Dir": "\(.*\)",\{0,1\}$/\1/p')
+  zip=$(printf '%s\n' "$json" | sed -n 's/^[[:space:]]*"Zip": "\(.*\)",\{0,1\}$/\1/p')
+  [ -n "$zip" ] && zip=$(dirname "$(dirname "$zip")")   # cache/download/<module path>
+  local p
+  for p in "$dir" "$zip"; do
+    case "$p" in
+      "$GOMODCACHE"/?*) run rm -rf "$p" ;;
+    esac
+  done
+}
 # Whether section 3 actually observed the unmaintained block. npm/pypi assume
 # it; Go sets it from the real outcome so section 5 can't claim an override of
 # a block that never happened.
@@ -97,6 +113,10 @@ elif [ "$ECOSYSTEM" = "go" ]; then
   # deletable by section 0.
   export GOENV="$SCRIPT_DIR/go.env" GOPROXY="$PROXY_URL"
   export GOMODCACHE="$SCRIPT_DIR/go-mod-cache" GOFLAGS=-modcacherw
+  # Section 2 may download the malicious module's files when the proxy doesn't
+  # block it. Delete the whole cache on any exit (including Ctrl-C) so they
+  # never linger on disk after the demo.
+  trap 'rm -rf "$SCRIPT_DIR/go-mod-cache"' EXIT
   # Real malicious module from the OpenSSF malicious-packages dataset (most of
   # the others there 403 on proxy.golang.org itself, so they can't show a Snyk
   # block). Snyk DOES have an advisory for it (SNYK-GOLANG-GITHUBCOMBUFFERZONECORP
@@ -119,10 +139,11 @@ elif [ "$ECOSYSTEM" = "go" ]; then
   # stale but are still served -- very popular modules seem to be exempt -- so
   # always verify a candidate against the proxy before using it here.
   UNMAINTAINED_PKG="github.com/mitchellh/go-homedir"
-  # AWS publishes this module several times a week, so there's almost always a
-  # release still inside the cooldown window (held 2 patch versions back on
-  # 2026-10-15).
-  COOLDOWN_PKG="github.com/aws/aws-sdk-go-v2/service/s3"
+  # AWS publishes these modules several times a week, so there's usually a
+  # release still inside the cooldown window. service/s3 caught up to public by
+  # 2026-10-21, so this is now service/dynamodb (held 2 minor versions back on
+  # that date: proxy v1.70.3, public v1.72.0). Swap again if the two match.
+  COOLDOWN_PKG="github.com/aws/aws-sdk-go-v2/service/dynamodb"
   # Zero dependencies, last release 2022-04-20, archived. Distinct from
   # go-homedir (which must stay blocked for section 3). Zero deps matters: a
   # blocked transitive dependency fails the install even when the top-level
@@ -225,7 +246,10 @@ else
         echo "   Snyk has a malicious-package advisory for this module (see"
         echo "   security.snyk.io), so the Known malware policy isn't being enforced for"
         echo "   Go on this tenant yet. Nothing was built or run: the module files were"
-        echo "   only fetched into go-mod-cache/, which section 0 deletes."
+        echo "   only fetched into go-mod-cache/."
+        echo
+        echo "Since nothing stopped the download, delete the malicious module's files now:"
+        go_delete_downloaded "$KNOWN_MALICIOUS_PKG"
         summarize "$KNOWN_MALICIOUS_PKG" "NOT blocked -- proxy served it (no malware policy hit)" ;;
       *)
         echo "-> Failed on both proxies, so this doesn't prove the malware rule engaged."
@@ -407,3 +431,7 @@ printf '%-42s %s\n' "------------------------------------------" "--------------
 for line in "${SUMMARY[@]}"; do
   echo "$line"
 done
+if [ "$ECOSYSTEM" = "go" ]; then
+  echo
+  echo "Cleanup: go-mod-cache/ (including any module section 2 downloaded) is deleted on exit."
+fi

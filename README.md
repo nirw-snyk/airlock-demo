@@ -117,7 +117,7 @@ Run it from the project directory. The script pauses between sections; press Ent
 | 1 | Normal install works through the proxy | `uuid`, `lodash`, `p-limit` | `packaging`, `certifi` | `klauspost/compress`, `x/term` + its one dependency `x/sys` (`go mod tidy`, `go run .`) |
 | 2 | Known-malicious package blocked | `@onum-releases/ixel` | `maliciouseuropy` (see below) | `bufferzonecorp/net-helper` (see below) |
 | 3 | Unmaintained package blocked | `left-pad` | `nose` | `mitchellh/go-homedir` |
-| 4 | Cooldown holds back the newest release | `@aws-sdk/client-s3` | `boto3` | `aws-sdk-go-v2/service/s3` |
+| 4 | Cooldown holds back the newest release | `@aws-sdk/client-s3` | `boto3` | `aws-sdk-go-v2/service/dynamodb` |
 | 5 | Allow list overrides the unmaintained block | `object-assign` | `pep8` | `mitchellh/mapstructure` |
 | 6 | Dashboard wrap-up | Install requests view | Install requests view | Install requests view |
 | 7 | Summary table | | | |
